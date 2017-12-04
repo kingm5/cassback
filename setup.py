@@ -24,13 +24,6 @@ setup(
     version='0.1.1',
     author='Aaron Morton',
     author_email='aaron@the-mortons.org',
-    packages = ["cassback",
-                "cassback.endpoints", 
-                "cassback.subcommands"],
-    install_requires=[
-        'boto>=2.2',
-        "watchdog>=0.6.", 
-        "pytz>=2012j"
-    ],
-    entry_points=entry_points
-)
+    packages=["cassback", "cassback.endpoints", "cassback.subcommands"],
+    install_requires=['boto>=2.2', "watchdog>=0.6.", "pytz>=2012j"],
+    entry_points=entry_points)
