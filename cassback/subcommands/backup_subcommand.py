@@ -317,6 +317,11 @@ class WatchdogWatcher(events.FileSystemEventHandler):
                               file_ref.stable_path)
                 return False
 
+            if cassandra.is_backups_path(file_ref.stable_path):
+                self.log.info("Ignoring backups path %s",
+                              file_ref.stable_path)
+                return False
+
             try:
                 component = cassandra.SSTableComponent(file_ref.stable_path)
             except (ValueError):

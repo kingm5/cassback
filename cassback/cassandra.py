@@ -33,21 +33,12 @@ import file_util
 class Components(object):
     """Constants for Cassandra SSTable components."""
 
-    DATA = "Data.db"
-    PRIMARY_INDEX = "Index.db"
-    FILTER = "Filter.db"
-    COMPRESSION_INFO = "CompressionInfo.db"
-    STATS = "Statistics.db"
-    DIGEST = "Digest.sha1"
-    SUMMARY = "Summary.db"
-    TOC = "TOC.txt"
 
-
-COMPACTED_MARKER = "Compacted"
-"""Marker added to compacted files."""
-
-TEMPORARY_MARKER = "tmp"
+TEMPORARY_MARKERS = ["tmp", "tmplink"]
 """Marker used to identify temp sstables that are being created."""
+
+TEMPORARY_SUFFIX = ".tmp"
+"""Suffix of temporary files."""
 
 FILE_VERSION_PATTERN = re.compile("[a-z]+")
 
@@ -56,13 +47,10 @@ log = logging.getLogger(__name__)
 # ============================================================================
 #
 
-MIN_VERSION = (1, 0, 0)
+MIN_VERSION = (2, 0, 1)
 
 TARGET_VERSION = None
 """Cassandra version we are working with. Used for file paths and things.
-
-Cannot use the version of the file because when 1.1 starts it moves files to
-new locations but does not change their file version.
 """
 
 
@@ -100,18 +88,30 @@ def _from_safe_datetime_fmt(dt_str):
     return datetime.datetime.strptime(dt_str, _SAFE_DT_FMT)
 
 
+def is_backups_path(file_path):
+    """Returns true if this path is a incremental backups path.
+
+    It's a pretty simple test: does it have 'backups' in it.
+    """
+    return _contains_in_path(file_path, "backups")
+
+
 def is_snapshot_path(file_path):
     """Returns true if this path is a snapshot path.
 
     It's a pretty simple test: does it have 'snapshots' in it.
     """
+    return _contains_in_path(file_path, "snapshots")
+
+
+def _contains_in_path(file_path, component):
     head = os.path.dirname(file_path or "")
     if not head:
         raise ValueError("file_path %s does not include directory" %
                          (file_path, ))
     while head != "/":
         head, tail = os.path.split(head)
-        if tail == "snapshots":
+        if tail == component:
             return True
     return False
 
@@ -258,6 +258,7 @@ class SSTableComponent(object):
                  generation=None,
                  component=None,
                  temporary=None,
+                 tableformat=None,
                  stat=None,
                  is_deleted=False):
         def props():
@@ -277,6 +278,8 @@ class SSTableComponent(object):
             else component
         self.temporary = props()["temporary"] if temporary is None \
             else temporary
+        self.format = props()["format"] if tableformat is None \
+            else tableformat
 
         self.is_deleted = is_deleted
         if stat is None:
@@ -300,6 +303,7 @@ class SSTableComponent(object):
             "generation": str(self.generation),
             "component": self.component,
             "temporary": str(self.temporary),
+            "format": self.format,
             "stat": self.stat.serialise(),
             "is_deleted": "true" if self.is_deleted else "false"
         }
@@ -316,6 +320,7 @@ class SSTableComponent(object):
             generation=int(data["generation"]),
             component=data["component"],
             temporary=True if data["temporary"].lower() == "true" else False,
+            format=data["format"],
             stat=FileStat.deserialise(data["stat"]),
             is_deleted=True if data["is_deleted"] == "true" else False)
 
@@ -323,6 +328,9 @@ class SSTableComponent(object):
         """Parses ``file_path`` to extact the component tokens.
 
         Raises :exc:`ValueError` if the ``file_path`` cannot be parsed.
+
+        Reference: (for C* 3.11)
+        https://github.com/apache/cassandra/blob/cassandra-3.11/src/java/org/apache/cassandra/io/sstable/Descriptor.java
 
         Returns a dict of the component properties.
         """
@@ -336,54 +344,49 @@ class SSTableComponent(object):
             Expected a token to be there.
             """
             try:
-                return tokens.pop(0)
-            except (IndexError):
-                raise ValueError("Not a valid SSTable file path %s" %
-                                 (file_path, ))
-
-        def peek():
-            """Peeks the tokens.
-            Expected a token to be there.
-            """
-            try:
-                return tokens[0]
+                return tokens.pop()
             except (IndexError):
                 raise ValueError("Not a valid SSTable file path %s" %
                                  (file_path, ))
 
         properties = {
-            "keyspace": pop() if TARGET_VERSION >= (1, 1, 0) else None,
-            "cf": pop(),
-            "temporary": peek() == TEMPORARY_MARKER
+            "component": pop(),
+            "temporary": file_name.endswith(TEMPORARY_SUFFIX),
         }
-        if properties["temporary"]:
-            pop()
 
-        # If we did not get the keyspace from the file name it should
-        # be in the path
-        if TARGET_VERSION < (1, 1, 0):
-            assert file_dir
-            assert not properties["keyspace"]
-            _, ks = os.path.split(file_dir)
-            self.log.debug("Using Cassandra version %s, extracted KS name %s"
-                           " from file dir %s", TARGET_VERSION, ks, file_dir)
-            properties["keyspace"] = ks
+        format_or_gen = pop()
+        if format_or_gen.isdigit():
+            properties["generation"] = int(format_or_gen)
+            properties["format"] = "legacy"
+        else:
+            properties["generation"] = int(pop())
+            properties["format"] = format_or_gen
+
+        properties['version'] = pop()
 
         # Older versions did not use two character file versions.
-        if FILE_VERSION_PATTERN.match(peek()):
-            properties["version"] = pop()
-        else:
+        if not FILE_VERSION_PATTERN.match(properties['version']):
             # If we cannot work out the version then we propably
             # decoded the file path wrong cause the cassandra version is wrong
             raise RuntimeError("Got invalid file version {version} for "
                                "file path {path} using Cassandra version {cass_ver}.".format(
-                                version=pop(), path=file_path, cass_ver=TARGET_VERSION))
+                                version=properties['version'], path=file_path, cass_ver=TARGET_VERSION))
 
-        properties["generation"] = int(pop())
-        properties["component"] = pop()
+        if not properties['temporary'] and len(tokens) > 0:
+            properties["temporary"] = pop() in TEMPORARY_MARKERS
+
+        head, cf = os.path.split(file_dir)
+        if cf.startswith('.'):
+            raise RuntimeError("Discovered index, indexes are not supported in file path {path}".format(
+                                path=file_path))
+
+        cf, _ = cf.split('-')
+        properties['cf'] = cf
+        _, properties['keyspace'] = os.path.split(head)
 
         self.log.debug("Got file properties %s from path %s", properties,
                        file_path)
+
         return properties
 
     @property
@@ -392,13 +395,13 @@ class SSTableComponent(object):
         current `TARGET_VERSION`.
         """
 
-        if TARGET_VERSION < (1, 1, 0):
-            # pre 1.1 the file name was CF-version-generation-component
-            fmt = "{cf}-{version}-{generation}-{component}"
-        else:
-            # Assume 1.1 and beyond
-            # file name adds the keyspace.
+        if self.format == "legacy":
+            # Assume 2.1.x and beyond
+            # file name adds the keyspace & cf
             fmt = "{keyspace}-{cf}-{version}-{generation}-{component}"
+        else:
+            # 3.x and beyond
+            fmt = "{version}-{generation}-{format}-{component}"
         return fmt.format(**vars(self))
 
     @property
@@ -409,7 +412,7 @@ class SSTableComponent(object):
         """
         # Assume 1.1 and beyond
         # file name adds the keyspace.
-        return "{keyspace}-{cf}-{version}-{generation}-{component}".format(
+        return "{keyspace}-{cf}-{version}-{generation}-{format}-{component}".format(
             **vars(self))
 
     @property
@@ -492,7 +495,8 @@ class SSTableComponent(object):
 
         return (other.keyspace == self.keyspace) and (
             other.cf == self.cf) and (other.version == self.version) and (
-                other.generation == self.generation)
+                other.generation == self.generation) and (
+                    other.format == self.format)
 
 
 # ============================================================================

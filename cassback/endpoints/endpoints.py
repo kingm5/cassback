@@ -174,7 +174,8 @@ class TransferTiming(object):
                       "{progress} bytes at {throughput:f} MB/sec {total} "\
                       "total"
 
-        self.log.info(pattern.format(path=path, elapsed_ms=elapsed_ms, throughput=throughput))
+        self.log.info(pattern.format(path=path, elapsed_ms=elapsed_ms, throughput=throughput,
+                                     total=total))
         return
 
     def __enter__(self):
