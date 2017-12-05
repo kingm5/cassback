@@ -64,12 +64,6 @@ class BackupSubCommand(subcommands.SubCommand):
             help='Interval to report on the size of the work queue.')
 
         sub_parser.add_argument(
-            '--recursive',
-            action='store_true',
-            default=False,
-            help='Recursively watch the given path(s)s for new SSTables')
-
-        sub_parser.add_argument(
             '--exclude-keyspace',
             dest='exclude_keyspaces',
             nargs="*",

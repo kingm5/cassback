@@ -94,7 +94,7 @@ def arg_parser():
 
     main_parser.add_argument(
         "--cassandra-version",
-        default="1.2.0",
+        default="2.1.0",
         dest="cassandra_version",
         help="Cassandra version to backup from or restore to.")
 
@@ -106,7 +106,7 @@ def arg_parser():
         help="Logging level.")
     main_parser.add_argument(
         "--log-file",
-        default="/var/log/cassback/cassback.log",
+        default="-",
         dest="log_file",
         help="Logging file.")
 
@@ -114,10 +114,13 @@ def arg_parser():
 
 
 def init_logging(args):
+    config = {
+        'level': getattr(logging, args.log_level),
+    }
+    if args.log_file != "-":
+        config['filename'] = os.path.abspath(args.log_file)
 
-    logging.basicConfig(
-        filename=os.path.abspath(args.log_file),
-        level=getattr(logging, args.log_level))
+    logging.basicConfig(**config)
     logging.info("Logging initialised.")
     return
 

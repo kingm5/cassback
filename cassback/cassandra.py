@@ -32,6 +32,7 @@ import file_util
 
 class Components(object):
     """Constants for Cassandra SSTable components."""
+    DATA = 'Data.db'
 
 
 TEMPORARY_MARKERS = ["tmp", "tmplink"]

@@ -154,7 +154,7 @@ class TransferTiming(object):
                 self.num_callbacks = j
                 break
 
-    def progress(self, progress, total):
+    def progress(self, progress):
         """Boto progress callback function.
 
         Logs the progress.
@@ -165,7 +165,7 @@ class TransferTiming(object):
         throughput = ((progress * 1.0) /
                       (1024**2)) / ((elapsed_ms / 1000) or 1)
 
-        if progress == total:
+        if progress == self.size:
             pattern = "Transfered file {path} in {elapsed_ms:d} ms size "\
                       "{total} at {throughput:f} MB/sec"
         else:
@@ -175,7 +175,7 @@ class TransferTiming(object):
                       "total"
 
         self.log.info(pattern.format(path=path, elapsed_ms=elapsed_ms, throughput=throughput,
-                                     total=total))
+                                     progress=progress, total=self.size))
         return
 
     def __enter__(self):
@@ -191,5 +191,5 @@ class TransferTiming(object):
             return False
 
         # report 100% progress.
-        self.progress(self.size, self.size)
+        self.progress(self.size)
         return False

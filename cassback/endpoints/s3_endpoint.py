@@ -21,9 +21,12 @@ import errno
 import json
 import logging
 import os.path
+import threading
 
-import boto
-from boto.s3 import key as s3_key
+import botocore.config
+import botocore.exceptions
+import boto3.session
+import boto3.s3.transfer
 
 from cassback import cassandra, file_util
 from cassback.endpoints import endpoints
@@ -36,16 +39,38 @@ class S3Endpoint(endpoints.EndpointBase):
 
     log = logging.getLogger("%s.%s" % (__name__, "S3Endpoint"))
     name = "s3"
+    bucket_lock = threading.Lock()
 
     def __init__(self, args):
         self.args = args
 
         self.log.info("Creating S3 connection.")
-        self.s3_conn = boto.connect_s3(self.args.aws_key, self.args.aws_secret)
-        self.s3_conn.retries = self.args.retries
+        self.session = boto3.session.Session(region_name=args.region)
+        self.core_config = botocore.config.Config(
+            s3={'addressing_style': args.aws_addressing_style},
+            retries={'max_attempts': args.retries},
+        )
+        self.resource = self.session.resource('s3', endpoint_url=args.s3_endpoint)
+        self.client = self.resource.meta.client
 
-        self.log.debug("Creating S3 bucket %(bucket_name)s" % vars(self.args))
-        self.bucket = self.s3_conn.get_bucket(self.args.bucket_name)
+        with S3Endpoint.bucket_lock:
+            try:
+                self.client.head_bucket(Bucket=args.bucket_name)
+            except botocore.exceptions.ClientError:
+                self.log.debug("Creating S3 bucket %(bucket_name)s" % vars(self.args))
+                options = {}
+                if args.region is not None:
+                    options['CreateBucketConfiguration'] = {}
+                    options['CreateBucketConfiguration']['LocationConstraint'] = args.region
+                self.resource.create_bucket(Bucket=args.bucket_name, **options)
+
+        self.bucket = self.resource.Bucket(args.bucket_name)
+
+        self.transfer_config = boto3.s3.transfer.TransferConfig(
+            multipart_threshold=args.max_upload_size_mb * (1024**2),
+            multipart_chunksize=args.multipart_chunk_size_mb * (1024**2),
+            use_threads=False,
+        )
 
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # Endpoint Base Overrides
@@ -58,17 +83,26 @@ class S3Endpoint(endpoints.EndpointBase):
             description="Configuration for the AWS S3 endpoint.")
 
         group.add_argument(
-            '--aws-key', dest='aws_key', default=None, help="AWS API Key")
-        group.add_argument(
-            '--aws-secret',
-            dest='aws_secret',
+            '--s3-endpoint',
             default=None,
-            help="AWS API Secret Key")
+            dest="s3_endpoint",
+            help='S3 endpoint (overrides default).')
+        group.add_argument(
+            '--aws-addressing-style',
+            default='path',
+            dest="aws_addressing_style",
+            help='AWS addressing style (path, virtual or auto).')
+        group.add_argument(
+            '--region',
+            default=None,
+            dest="region",
+            help='S3 region name for the bucket.')
         group.add_argument(
             '--bucket-name',
             default=None,
+            required=True,
             dest="bucket_name",
-            help='S3 bucket to upload to.')
+            help='S3 bucket to upload to (created automatically if doesn\'t exist).')
         group.add_argument(
             '--key-prefix',
             default="",
@@ -108,15 +142,22 @@ class S3Endpoint(endpoints.EndpointBase):
 
     def backup_file(self, backup_file):
 
-        is_multipart_upload = backup_file.component.stat.size > (
-            self.args.max_upload_size_mb * (1024**2))
+        fqn = self._fqn(backup_file.backup_path)
+        self.log.debug("Starting upload of %s to %s:%s",
+                       backup_file, self.args.bucket_name, fqn)
 
-        if is_multipart_upload:
-            path = self._do_multi_part_upload(backup_file)
-        else:
-            path = self._do_single_part_upload(backup_file)
+        timing = endpoints.TransferTiming(self.log, fqn,
+                                          backup_file.component.stat.size)
 
-        return path
+        self.bucket.upload_file(
+            backup_file.file_path, fqn,
+            ExtraArgs={'Metadata': self._dict_to_aws_meta(backup_file.serialise())},
+            Callback=timing.progress,
+            Config=self.transfer_config)
+
+        self.log.debug("Finished upload of %s to %s:%s",
+                       backup_file, self.args.bucket_name, fqn)
+        return fqn
 
     def read_backup_file(self, path):
 
@@ -136,22 +177,21 @@ class S3Endpoint(endpoints.EndpointBase):
             self._aws_meta_to_dict(key.metadata))
 
     def backup_keyspace(self, ks_backup):
-
         key_name = ks_backup.backup_path
         fqn = self._fqn(key_name)
 
         self.log.debug("Starting to store json to %s:%s",
                        self.args.bucket_name, fqn)
 
-        # TODO: Overwrite ?
-        key = self.bucket.new_key(fqn)
         json_str = json.dumps(ks_backup.serialise())
-        timing = endpoints.TransferTiming(self.log, fqn, len(json_str))
-        key.set_contents_from_string(
-            json_str,
-            headers={'Content-Type': 'application/json'},
-            cb=timing.progress,
-            num_cb=timing.num_callbacks)
+
+        # TODO: Overwrite ?
+        with endpoints.TransferTiming(self.log, fqn, len(json_str)):
+            self.bucket.put_object(
+                Key=fqn,
+                Body=json_str,
+                ContentType='application/json',
+            )
 
         self.log.debug("Finished storing json to %s:%s", self.args.bucket_name,
                        fqn)
@@ -203,37 +243,41 @@ class S3Endpoint(endpoints.EndpointBase):
         otherwise.
         """
 
-        key_name = relative_path
-        fqn = self._fqn(key_name)
+        fqn = self._fqn(relative_path)
 
         self.log.debug("Checking if key %s:%s exists", self.args.bucket_name,
                        fqn)
-        key = self.bucket.get_key(fqn)
-        return False if key is None else True
+
+        try:
+            self.client.head_object(Bucket=self.bucket.name, Key=fqn)
+        except botocore.exceptions.ClientError:
+            return False
+
+        return True
 
     def validate_checksum(self, relative_path, expected_hash):
         """Validates that the MD5 checksum of the file in the backup at
         ``relative_path`` matches ``expected_md5_hex``.
         """
 
-        key_name = relative_path
-        fqn = self._fqn(key_name)
+        fqn = self._fqn(relative_path)
 
         self.log.debug("Starting to validate checkum for %s:%s",
                        self.args.bucket_name, fqn)
 
-        key = self.bucket.get_key(fqn)
-        if key is None:
+        try:
+            response = self.client.head_object(Bucket=self.bucket.name, Key=fqn)
+        except botocore.exceptions.ClientError:
             self.log.debug("Key %s does not exist, so checksum is invalid",
                            fqn)
             return False
 
         # original checked size, not any more.
-        key_md5 = key.get_metadata('md5sum')
+        key_md5 = response['Metadata'].get('md5', '')
         if key_md5:
             hash_match = expected_hash == key_md5
         else:
-            key_etag = key.etag.strip('"')
+            key_etag = response['ETag'].strip('"')
             self.log.info("Missing md5 meta data for %s using etag", fqn)
             hash_match = expected_hash == key_etag
 
@@ -405,69 +449,6 @@ class S3Endpoint(endpoints.EndpointBase):
         prefix = "%s/" % (self.args.key_prefix) if self.args.key_prefix\
             else ""
         return "%s%s" % (prefix, key_name)
-
-    def _do_multi_part_upload(self, backup_file):
-
-        fqn = self._fqn(backup_file.backup_path)
-        self.log.debug("Starting multi part upload of %s to %s:%s",
-                       backup_file, self.args.bucket_name, fqn)
-        # All meta tags must be strings
-        metadata = self._dict_to_aws_meta(backup_file.serialise())
-        mp = self.bucket.initiate_multipart_upload(fqn, metadata=metadata)
-
-        timing = endpoints.TransferTiming(self.log, fqn,
-                                          backup_file.component.stat.size)
-        chunk = None
-        try:
-            # Part numbers must start at 1
-            for part, chunk in enumerate(
-                    self._chunk_file(backup_file.file_path), 1):
-
-                self.log.debug("Uploading part %s", part)
-                try:
-                    mp.upload_part_from_file(
-                        chunk,
-                        part,
-                        cb=timing.progress,
-                        num_cb=timing.num_callbacks)
-                finally:
-                    chunk.close()
-        except (Exception):
-            mp.cancel_upload()
-            raise
-
-        mp.complete_upload()
-        self.log.debug("Finished multi part upload of %s to %s:%s",
-                       backup_file, self.args.bucket_name, fqn)
-        return fqn
-
-    def _do_single_part_upload(self, backup_file):
-
-        fqn = self._fqn(backup_file.backup_path)
-        self.log.debug("Starting single part upload of %s to %s:%s",
-                       backup_file, self.args.bucket_name, fqn)
-        key = self.bucket.new_key(fqn)
-
-        # All meta data fields have to be strings.
-        key.update_metadata(self._dict_to_aws_meta(backup_file.serialise()))
-
-        # # Rebuild the MD5 tuple boto makes
-        # md5 = (
-        #     backup_file.md5,
-        #     source_meta["md5_base64"],
-        #     source_meta["size"]
-        # )
-        timing = endpoints.TransferTiming(self.log, fqn,
-                                          backup_file.component.stat.size)
-        key.set_contents_from_filename(
-            backup_file.file_path,
-            replace=False,
-            cb=timing.progress,
-            num_cb=timing.num_callbacks)
-
-        self.log.debug("Finished single part upload of %s to %s:%s",
-                       backup_file, self.args.bucket_name, fqn)
-        return fqn
 
     def _chunk_file(self, file_path):
         """Yield chunks from ``file_path``.
