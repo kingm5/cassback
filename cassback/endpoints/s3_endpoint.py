@@ -45,7 +45,11 @@ class S3Endpoint(endpoints.EndpointBase):
         self.args = args
 
         self.log.info("Creating S3 connection.")
-        self.session = boto3.session.Session(region_name=args.region)
+        self.session = boto3.session.Session(
+            aws_access_key_id=args.aws_key,
+            aws_secret_access_key=args.aws_secret,
+            region_name=args.region,
+            )
         self.core_config = botocore.config.Config(
             s3={'addressing_style': args.aws_addressing_style},
             retries={'max_attempts': args.retries},
@@ -56,7 +60,10 @@ class S3Endpoint(endpoints.EndpointBase):
         with S3Endpoint.bucket_lock:
             try:
                 self.client.head_bucket(Bucket=args.bucket_name)
-            except botocore.exceptions.ClientError:
+            except botocore.exceptions.ClientError as e:
+                if e.response['Error']['Code'] != "404":
+                    raise
+
                 self.log.debug("Creating S3 bucket %(bucket_name)s" % vars(self.args))
                 options = {}
                 if args.region is not None:
@@ -88,6 +95,16 @@ class S3Endpoint(endpoints.EndpointBase):
             dest="s3_endpoint",
             help='S3 endpoint (overrides default).')
         group.add_argument(
+            '--aws-key',
+            dest='aws_key',
+            default=None,
+            help="AWS Access Key (picked up from the environment if not set)")
+        group.add_argument(
+            '--aws-secret',
+            dest='aws_secret',
+            default=None,
+            help="AWS Access Secret Key (picked up from the environment if not set)")
+        group.add_argument(
             '--aws-addressing-style',
             default='path',
             dest="aws_addressing_style",
@@ -100,7 +117,6 @@ class S3Endpoint(endpoints.EndpointBase):
         group.add_argument(
             '--bucket-name',
             default=None,
-            required=True,
             dest="bucket_name",
             help='S3 bucket to upload to (created automatically if doesn\'t exist).')
         group.add_argument(
@@ -167,25 +183,23 @@ class S3Endpoint(endpoints.EndpointBase):
         self.log.debug("Starting to read meta for key %s:%s ",
                        self.args.bucket_name, fqn)
 
-        key = self.bucket.get_key(fqn)
-        if key is None:
-            raise EnvironmentError(errno.ENOENT, fqn)
+        try:
+            return cassandra.BackupFile.deserialise(
+                self._aws_meta_to_dict(self.bucket.Object(fqn).metadata))
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == "404":
+                raise EnvironmentError(errno.ENOENT, fqn)
 
-        self.log.debug("Finished reading meta for key %s:%s ",
-                       self.args.bucket_name, fqn)
-        return cassandra.BackupFile.deserialise(
-            self._aws_meta_to_dict(key.metadata))
+            raise
 
     def backup_keyspace(self, ks_backup):
-        key_name = ks_backup.backup_path
-        fqn = self._fqn(key_name)
+        fqn = self._fqn(ks_backup.backup_path)
 
         self.log.debug("Starting to store json to %s:%s",
                        self.args.bucket_name, fqn)
 
         json_str = json.dumps(ks_backup.serialise())
 
-        # TODO: Overwrite ?
         with endpoints.TransferTiming(self.log, fqn, len(json_str)):
             self.bucket.put_object(
                 Key=fqn,
@@ -198,43 +212,48 @@ class S3Endpoint(endpoints.EndpointBase):
         return
 
     def read_keyspace(self, path):
-
-        key_name = path
-        fqn = self._fqn(key_name)
+        fqn = self._fqn(path)
 
         self.log.debug("Starting to read json from %s:%s",
                        self.args.bucket_name, fqn)
 
-        key = self.bucket.get_key(fqn)
-        if key is None:
-            raise EnvironmentError(errno.ENOENT, fqn)
-        timing = endpoints.TransferTiming(self.log, fqn, 0)
-        data = json.loads(
-            key.get_contents_as_string(
-                cb=timing.progress, num_cb=timing.num_callbacks))
+        with endpoints.TransferTiming(self.log, fqn, 0):
+            try:
+                body = self.bucket.Object(fqn).get()['Body']
+            except botocore.exceptions.ClientError as e:
+                if e.response['Error']['Code'] == "404":
+                    raise EnvironmentError(errno.ENOENT, fqn)
+
+                raise
+
+        data = json.load(body)
+
         self.log.debug("Finished reading json from %s:%s",
                        self.args.bucket_name, fqn)
 
         return cassandra.KeyspaceBackup.deserialise(data)
 
     def restore_file(self, backup_file, dest_prefix):
-        """
-        """
-
-        key_name = backup_file.backup_path
-        fqn = self._fqn(key_name)
+        fqn = self._fqn(backup_file.backup_path)
         dest_path = os.path.join(dest_prefix, backup_file.restore_path)
         file_util.ensure_dir(os.path.dirname(dest_path))
+
         self.log.debug("Starting to restore from %s:%s to %s",
                        self.args.bucket_name, fqn, dest_path)
 
-        key = self.bucket.get_key(fqn)
-        if key is None:
-            raise EnvironmentError(errno.ENOENT, fqn)
         timing = endpoints.TransferTiming(self.log, fqn,
                                           backup_file.component.stat.size)
-        key.get_contents_to_filename(
-            dest_path, cb=timing.progress, num_cb=timing.num_callbacks)
+        try:
+            self.bucket.download_file(
+                fqn, backup_file.file_path,
+                ExtraArgs={},
+                Callback=timing.progress,
+                Config=self.transfer_config)
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == "404":
+                raise EnvironmentError(errno.ENOENT, fqn)
+
+            raise
 
         return dest_path
 
@@ -250,8 +269,11 @@ class S3Endpoint(endpoints.EndpointBase):
 
         try:
             self.client.head_object(Bucket=self.bucket.name, Key=fqn)
-        except botocore.exceptions.ClientError:
-            return False
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == "404":
+                return False
+
+            raise
 
         return True
 
@@ -302,28 +324,31 @@ class S3Endpoint(endpoints.EndpointBase):
         fqn = self._fqn(key_name)
 
         self.log.debug("Starting to iterate the dir for %s:%s",
-                       self.args.bucket_name, fqn)
+                       self.bucket.name, fqn)
 
         if include_files and not include_dirs and not recursive:
             # easier, we just want to list the keys.
             key_names = [
-                key.name.replace(fqn, "")
-                for key in self.bucket.list(prefix=fqn)
+                obj.key.replace(fqn, "")
+                for obj in self.bucket.objects.filter(Prefix=fqn)
             ]
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug("For dir %s:%s got files only %s",
-                               self.args.bucket_name, fqn, key_names)
+                               self.bucket.name, fqn, key_names)
             return key_names
 
         items = []
 
         if not recursive:
-            # return files and/or directories in this path
-            for entry in self.bucket.list(prefix=fqn, delimiter="/"):
-                if include_files and isinstance(entry, s3_key.Key):
-                    items.append(entry.name.replace(fqn, ""))
-                elif include_dirs:
-                    items.append(entry.name.replace(fqn, ""))
+            for page in self.client.get_paginator('list_objects_v2'). \
+                    paginate(Bucket=self.bucket.name, Prefix=fqn, Delimiter="/"):
+                # return files and/or directories in this path
+                if include_files:
+                    for key in page.get('Contents', []):
+                        items.append(key['Key'].replace(fqn, ""))
+                if include_dirs:
+                    for directory in page.get('CommonPrefixes', []):
+                        items.append(directory['Prefix'].replace(fqn, ""))
 
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug("For dir %s:%s got non recursive dirs and/or "
@@ -332,20 +357,22 @@ class S3Endpoint(endpoints.EndpointBase):
 
         # recursive, we need to do a hierarchal list
         def _walk_keys(inner_key):
-            for entry in self.bucket.list(prefix=inner_key, delimiter="/"):
-                if isinstance(entry, s3_key.Key):
-                    yield entry.name
-                else:
-                    # this is a directory
+            for page in self.client.get_paginator('list_objects_v2'). \
+                    paginate(Bucket=self.bucket.name, Prefix=inner_key, Delimiter="/"):
+
+                for key in page.get('Contents', []):
+                    yield key['Key']
+
+                for directory in page.get('CommonPrefixes', []):
                     if include_dirs:
-                        yield entry.name
-                    for sub_entry in _walk_keys(entry.name):
+                        yield directory['Prefix']
+                    for sub_entry in _walk_keys(directory['Prefix']):
                         yield sub_entry
 
         items = list(_walk_keys(fqn))
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug("For dir %s:%s got recursive dirs and/or "
-                           "files %s", self.args.bucket_name, fqn, items)
+                           "files %s", self.bucket.name, fqn, items)
         return items
 
     def remove_file(self, relative_path, dry_run=False):
@@ -353,28 +380,21 @@ class S3Endpoint(endpoints.EndpointBase):
 
         Returns the full path to the file in the backup."""
 
-        key_name = relative_path
-        fqn = self._fqn(key_name)
+        fqn = self._fqn(relative_path)
 
         if dry_run:
-            return key_name
+            return relative_path
 
         self.log.debug("Starting to delete key %s:%s" % (
-            self.args.bucket_name,
-            key_name,
+            self.bucket.name,
+            fqn,
         ))
 
-        key = self.bucket.get_key(fqn)
-        assert key is not None, "Cannot delete missing key %s:%s" % (
-            self.args.bucket_name,
-            key_name,
-        )
+        self.bucket.Object(fqn).delete()
 
-        key.delete()
-
-        self.log.debug("Finished deleting from %s:%s", self.args.bucket_name,
-                       key_name)
-        return key_name
+        self.log.debug("Finished deleting from %s:%s", self.bucket.name,
+                       fqn)
+        return relative_path
 
     def remove_file_with_meta(self, relative_path, dry_run=False):
         """Removes the file at the ``relative_path`` that is expected to
@@ -437,7 +457,7 @@ class S3Endpoint(endpoints.EndpointBase):
 
         props = {}
         for k, v in aws_meta.iteritems():
-            set_value(props, k, v)
+            set_value(props, k.replace('-', '_'), v)
         return props
 
     def _fqn(self, key_name):

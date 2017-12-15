@@ -42,7 +42,7 @@ class ShowSubCommand(subcommands.SubCommand):
         sub_parser = super(ShowSubCommand, cls).add_sub_parser(sub_parsers)
 
         sub_parser.add_argument(
-            "backup_name", help="Purge backups older than this date time.")
+            "backup_name", help="Backup to show.")
 
         return sub_parser
 

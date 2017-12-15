@@ -321,7 +321,7 @@ class SSTableComponent(object):
             generation=int(data["generation"]),
             component=data["component"],
             temporary=True if data["temporary"].lower() == "true" else False,
-            format=data["format"],
+            tableformat=data["format"],
             stat=FileStat.deserialise(data["stat"]),
             is_deleted=True if data["is_deleted"] == "true" else False)
 
@@ -408,8 +408,6 @@ class SSTableComponent(object):
     @property
     def backup_file_name(self):
         """Returns the file name ot use when backing up this component.
-
-        This name ignores the curret :attr:`cassandra.TARGET_VERSION`.
         """
         # Assume 1.1 and beyond
         # file name adds the keyspace.
