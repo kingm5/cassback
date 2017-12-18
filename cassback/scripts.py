@@ -8,7 +8,6 @@ import traceback
 
 import pkg_resources
 
-from cassback import cassandra
 from cassback.endpoints import endpoints
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -93,12 +92,6 @@ def arg_parser():
         help="Name of the endpoint to use for backup and restore.")
 
     main_parser.add_argument(
-        "--cassandra-version",
-        default="2.1.0",
-        dest="cassandra_version",
-        help="Cassandra version to backup from or restore to.")
-
-    main_parser.add_argument(
         "--log-level",
         default="INFO",
         dest="log_level",
@@ -134,7 +127,6 @@ def cassback_main():
 
     log = logging.getLogger(__name__)
     log.info("Got command args %(args)s" % vars())
-    cassandra.set_version(args.cassandra_version)
 
     try:
         # parsing the args works out which function we want to call.

@@ -46,32 +46,6 @@ FILE_VERSION_PATTERN = re.compile("[a-z]+")
 log = logging.getLogger(__name__)
 
 # ============================================================================
-#
-
-MIN_VERSION = (2, 0, 1)
-
-TARGET_VERSION = None
-"""Cassandra version we are working with. Used for file paths and things.
-"""
-
-
-def set_version(ver):
-    """Set the global cassandra version.
-
-    If ``ver`` is string we expect the form "major.minor.rev". Otherwise it is
-    expected to be a tuple of ints.
-    """
-
-    global TARGET_VERSION
-    if isinstance(ver, basestring):
-        TARGET_VERSION = tuple(int(i) for i in ver.split(".")[:3])
-    else:
-        TARGET_VERSION = ver
-    log.info("Cassandra version changed to %s", TARGET_VERSION)
-    return
-
-
-# ============================================================================
 # Utility.
 
 _SAFE_DT_FMT = "%Y_%m_%dT%H_%M_%S_%f"
@@ -370,8 +344,8 @@ class SSTableComponent(object):
             # If we cannot work out the version then we propably
             # decoded the file path wrong cause the cassandra version is wrong
             raise RuntimeError("Got invalid file version {version} for "
-                               "file path {path} using Cassandra version {cass_ver}.".format(
-                                version=properties['version'], path=file_path, cass_ver=TARGET_VERSION))
+                               "file path {path}.".format(
+                                version=properties['version'], path=file_path))
 
         if not properties['temporary'] and len(tokens) > 0:
             properties["temporary"] = pop() in TEMPORARY_MARKERS
@@ -393,7 +367,7 @@ class SSTableComponent(object):
     @property
     def file_name(self):
         """Returns the file name for the componet formatted to the
-        current `TARGET_VERSION`.
+        component version.
         """
 
         if self.format == "legacy":
@@ -413,76 +387,6 @@ class SSTableComponent(object):
         # file name adds the keyspace.
         return "{keyspace}-{cf}-{version}-{generation}-{format}-{component}".format(
             **vars(self))
-
-    @property
-    def cass_version(self):
-        """Returns the Cassandra version that created the current file by
-        inspecting the major and minor file version.
-
-        Cassandra version is returned as a three part integer tuple
-        (major, minor, rev).
-
-        See o.a.c.io.sstable.Descriptor in the Cassandra code for up to date
-        info on the versions.
-
-        At the time of writing::
-
-            public static final String LEGACY_VERSION = "a"; // "pre-history"
-            // b (0.7.0): added version to sstable filenames
-            // c (0.7.0): bloom filter component computes hashes over raw key bytes instead of strings
-            // d (0.7.0): row size in data component becomes a long instead of int
-            // e (0.7.0): stores undecorated keys in data and index components
-            // f (0.7.0): switched bloom filter implementations in data component
-            // g (0.8): tracks flushed-at context in metadata component
-            // h (1.0): tracks max client timestamp in metadata component
-            // hb (1.0.3): records compression ration in metadata component
-            // hc (1.0.4): records partitioner in metadata component
-            // hd (1.0.10): includes row tombstones in maxtimestamp
-            // he (1.1.3): includes ancestors generation in metadata component
-            // hf (1.1.6): marker that replay position corresponds to 1.1.5+ millis-based id (see CASSANDRA-4782)
-            // ia (1.2.0): column indexes are promoted to the index file
-            //             records estimated histogram of deletion times in tombstones
-            //             bloom filter (keys and columns) upgraded to Murmur3
-            // ib (1.2.1): tracks min client timestamp in metadata component
-        """
-
-        major_version = self.version[0]
-        minor_version = self.version[1] if len(self.version) > 1 else ""
-
-        if major_version == "a":
-            assert not minor_version
-            return (0, 6, 0)
-
-        if major_version >= "b" and major_version <= "f":
-            assert not minor_version
-            return (0, 7, 0)
-
-        if major_version == "g":
-            assert not minor_version
-            return (0, 8, 0)
-
-        if major_version == "h":
-            if not minor_version:
-                return (1, 0, 0)
-            elif minor_version == "b":
-                return (1, 0, 3)
-            elif minor_version == "c":
-                return (1, 0, 4)
-            elif minor_version == "d":
-                return (1, 0, 10)
-            elif minor_version == "e":
-                return (1, 1, 3)
-            elif minor_version == "f":
-                return (1, 1, 6)
-
-        if major_version == "i":
-            if minor_version == "a":
-                return (1, 2, 0)
-            elif minor_version == "b":
-                return (1, 2, 1)
-
-        raise ValueError(
-            "Unknown file format {version}".format(version=self.version))
 
     def same_sstable(self, other):
         """Returns ``True`` if the ``other`` :cls:`SSTableComponent`
@@ -529,7 +433,6 @@ class BackupFile(object):
         return {
             "host": self.host,
             "md5": self.md5,
-            "cassandra_version": ".".join(str(i) for i in TARGET_VERSION),
             "component": self.component.serialise()
         }
 
@@ -567,17 +470,9 @@ class BackupFile(object):
 
     @property
     def restore_path(self):
-        """Gets the path to restore this file to formatted for the current
-        ``TARGET_VERSION``.
-
+        """Gets the path to restore this file.
         """
 
-        if TARGET_VERSION < (1, 1, 0):
-            # Pre 1.1 path was keyspace/sstable
-            return os.path.join(*(
-                self.component.keyspace,
-                self.component.file_name,
-            ))
         # after 1.1  path was keyspace/cf/sstable
         return os.path.join(*(
             self.component.keyspace,
