@@ -26,7 +26,7 @@ import time
 
 from watchdog import events, observers
 
-from cassback import cassandra, file_util
+from cassback import cassandra, file_util, healthcheck
 from cassback.subcommands import subcommands
 
 # ============================================================================
@@ -98,10 +98,23 @@ class BackupSubCommand(subcommands.SubCommand):
             default=socket.getfqdn(),
             help="Host to backup this node as.")
 
+        sub_parser.add_argument(
+            "--healthcheck-host",
+            default='0.0.0.0',
+            help="Host to bind for TCP healthcheck.")
+        sub_parser.add_argument(
+            "--healthcheck-port",
+            default=0,
+            type=int,
+            help="Port to bind for TCP healthcheck, 0 disables healthcheck.")
+
         return sub_parser
 
     def __call__(self):
         self.log.info("Starting sub command %s", self.command_name)
+
+        if self.args.healthcheck_port != 0:
+            healthcheck.start(self.args.healthcheck_host, self.args.healthcheck_port)
 
         # Make a queue, we put the files that need to be backed up here.
         file_q = Queue.Queue()
