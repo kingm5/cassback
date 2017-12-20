@@ -89,9 +89,19 @@ class BackupSubCommand(subcommands.SubCommand):
             help="Don't watch for file changes, exit immediately.")
 
         sub_parser.add_argument(
-            "--cassandra_data_dir",
+            "--cassandra-data-dir",
             default="/var/lib/cassandra/data",
             help="Top level Cassandra data directory.")
+        sub_parser.add_argument(
+            "--temp-dir",
+            default=None,
+            help="Temporary directory to link files to while uploading, it should reside on the same filesystem"
+                 "as Cassandra data directory, if not set default temporary directory is used.")
+        sub_parser.add_argument(
+            "--cleanup-temp-dir",
+            default=False,
+            action="store_true",
+            help="Clean up temporary directory on startup from leftover files.")
 
         sub_parser.add_argument(
             "--host",
@@ -116,6 +126,12 @@ class BackupSubCommand(subcommands.SubCommand):
         if self.args.healthcheck_port != 0:
             healthcheck.start(self.args.healthcheck_host, self.args.healthcheck_port)
 
+        if self.args.temp_dir is not None:
+            file_util.ensure_dir(self.args.temp_dir)
+
+        if self.args.cleanup_temp_dir:
+            file_util.FileReferenceContext.cleanup_temp_dir(self.args.temp_dir)
+
         # Make a queue, we put the files that need to be backed up here.
         file_q = Queue.Queue()
 
@@ -123,7 +139,8 @@ class BackupSubCommand(subcommands.SubCommand):
         watcher = WatchdogWatcher(
             self.args.cassandra_data_dir, file_q, self.args.ignore_existing,
             self.args.ignore_changes, self.args.exclude_keyspaces,
-            self.args.include_system_keyspace)
+            self.args.include_system_keyspace,
+            self.args.temp_dir)
 
         # Make worker threads
         self.workers = [
@@ -263,7 +280,7 @@ class WatchdogWatcher(events.FileSystemEventHandler):
     log = logging.getLogger("%s.%s" % (__name__, "WatchdogWatcher"))
 
     def __init__(self, data_dir, file_queue, ignore_existing, ignore_changes,
-                 exclude_keyspaces, include_system_keyspace):
+                 exclude_keyspaces, include_system_keyspace, temp_dir):
 
         self.data_dir = data_dir
         self.file_queue = file_queue
@@ -271,6 +288,7 @@ class WatchdogWatcher(events.FileSystemEventHandler):
         self.ignore_changes = ignore_changes
         self.exclude_keyspaces = frozenset(exclude_keyspaces or [])
         self.include_system_keyspace = include_system_keyspace
+        self.temp_dir = temp_dir
 
         self.keyspaces = {}
 
@@ -312,8 +330,11 @@ class WatchdogWatcher(events.FileSystemEventHandler):
         return ks_manifest
 
     def _maybe_queue_file(self, file_path, enqueue=True):
+        if self.temp_dir is not None and os.path.commonprefix([file_path, self.temp_dir]) == self.temp_dir:
+            # if temp_dir is under data_dir, skip temp files immediately
+            return False
 
-        with file_util.FileReferenceContext(file_path) as file_ref:
+        with file_util.FileReferenceContext(file_path, root_dir=self.data_dir, temp_dir=self.temp_dir) as file_ref:
             if file_ref is None:
                 # File was deleted before we could link it.
                 self.log.info("Ignoring deleted path %s", file_path)
@@ -373,16 +394,24 @@ class WatchdogWatcher(events.FileSystemEventHandler):
         return
 
     def on_moved(self, event):
+        if self.temp_dir is not None and os.path.commonprefix([event.src_path, self.temp_dir]) == self.temp_dir:
+            # if temp_dir is under data_dir, skip temp files immediately
+            return
+
         self._maybe_queue_file(event.dest_path)
         return
 
     def on_deleted(self, event):
-
         # Deletes happen quickly when compaction completes.
         # Rather than do a backup for each file we only backup when
         # a -Data.db component is deleted.
 
         file_path = event.src_path
+
+        if self.temp_dir is not None and os.path.commonprefix([file_path, self.temp_dir]) == self.temp_dir:
+            # if temp_dir is under data_dir, skip temp files immediately
+            return
+
         if cassandra.is_snapshot_path(file_path):
             self.log.info("Ignoring deleted snapshot path %s", file_path)
             return

@@ -1,6 +1,7 @@
 """Utilities for working with files."""
 
 import errno
+import glob
 import logging
 import os
 import os.path
@@ -81,7 +82,7 @@ def human_disk_bytes(bytes):
 class FileReferenceContext(object):
     log = logging.getLogger("%s.%s" % (__name__, "FileReferenceContext"))
 
-    def __init__(self, source_path):
+    def __init__(self, source_path, root_dir=None, temp_dir=None):
         """Creates a temporary hard link for the file at
         ``source_path``.
 
@@ -89,14 +90,26 @@ class FileReferenceContext(object):
         it is left. You can also call the ``link`` and ``close`` functions
         to achieve the same result.
 
-        The full path of the ``source_path`` is re-created under a temporary
-        directory so that we can parse the path name for information.
+        The full (relative to ``root_dir``) path of the ``source_path``
+        is re-created under a temporary directory so that we can parse
+        the path name for information.
         """
 
         self._source_path = source_path
+        self._root_dir = root_dir
+        self._temp_dir = temp_dir
         self._stable_dir = None
         self.stable_path = None
         self.ignore_next_exit = False
+
+    @classmethod
+    def cleanup_temp_dir(cls, temp_dir):
+        """Removes cassback temporary stuff in directory.
+        """
+        for directory in glob.glob(os.path.join(temp_dir, "cassback-*")):
+            if os.path.isdir(directory):
+                cls.log.warn("Cleaning up temporary directory %s", directory)
+                shutil.rmtree(directory)
 
     def link(self):
         """Generates the stable link and returns it.
@@ -125,9 +138,11 @@ class FileReferenceContext(object):
             return self.stable_path
 
         _, file_name = os.path.split(self._source_path)
-        stable_dir = tempfile.mkdtemp(prefix="%s-" % file_name)
-        assert self._source_path.startswith("/")
-        stable_path = os.path.join(stable_dir, self._source_path[1:])
+        stable_dir = tempfile.mkdtemp(prefix="cassback-%s-" % file_name, dir=self._temp_dir)
+        assert os.path.isabs(self._source_path)
+
+        dest_path = os.path.relpath(self._source_path, self._root_dir if self._root_dir is not None else "/")
+        stable_path = os.path.join(stable_dir, dest_path)
 
         self.log.debug("Linking %s to point to %s", stable_path,
                        self._source_path)
