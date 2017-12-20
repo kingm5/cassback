@@ -16,6 +16,7 @@
 # limitations under the License.
 
 import argparse
+import base64
 import cStringIO
 import errno
 import json
@@ -79,6 +80,13 @@ class S3Endpoint(endpoints.EndpointBase):
             use_threads=False,
         )
 
+        self.sse_options = {}
+        if args.sse_c_key != "":
+            self.sse_options = {
+                'SSECustomerAlgorithm': 'AES256',
+                'SSECustomerKey': base64.standard_b64decode(args.sse_c_key),
+            }
+
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # Endpoint Base Overrides
 
@@ -124,6 +132,11 @@ class S3Endpoint(endpoints.EndpointBase):
             default="",
             dest="key_prefix",
             help='S3 key prefix.')
+        group.add_argument(
+            '--sse-c-key',
+            default="",
+            dest="sse_c_key",
+            help='S3 SSE-C encryption key, base64-encoded (enables server-side encryption).')
 
         group.add_argument(
             '--max-upload-size-mb',
@@ -167,7 +180,10 @@ class S3Endpoint(endpoints.EndpointBase):
 
         self.bucket.upload_file(
             backup_file.file_path, fqn,
-            ExtraArgs={'Metadata': self._dict_to_aws_meta(backup_file.serialise())},
+            ExtraArgs=dict(
+                Metadata=self._dict_to_aws_meta(backup_file.serialise()),
+                **self.sse_options
+            ),
             Callback=timing.progress,
             Config=self.transfer_config)
 
@@ -177,15 +193,16 @@ class S3Endpoint(endpoints.EndpointBase):
 
     def read_backup_file(self, path):
 
-        key_name = path
-        fqn = self._fqn(key_name)
+        fqn = self._fqn(path)
 
         self.log.debug("Starting to read meta for key %s:%s ",
                        self.args.bucket_name, fqn)
 
         try:
+            resp = self.client.head_object(Bucket=self.bucket.name, Key=fqn, **self.sse_options)
+
             return cassandra.BackupFile.deserialise(
-                self._aws_meta_to_dict(self.bucket.Object(fqn).metadata))
+                self._aws_meta_to_dict(resp['Metadata']))
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] == "404":
                 raise EnvironmentError(errno.ENOENT, fqn)
@@ -205,6 +222,7 @@ class S3Endpoint(endpoints.EndpointBase):
                 Key=fqn,
                 Body=json_str,
                 ContentType='application/json',
+                **self.sse_options
             )
 
         self.log.debug("Finished storing json to %s:%s", self.args.bucket_name,
@@ -219,7 +237,7 @@ class S3Endpoint(endpoints.EndpointBase):
 
         with endpoints.TransferTiming(self.log, fqn, 0):
             try:
-                body = self.bucket.Object(fqn).get()['Body']
+                body = self.bucket.Object(fqn).get(**self.sse_options)['Body']
             except botocore.exceptions.ClientError as e:
                 if e.response['Error']['Code'] == "404":
                     raise EnvironmentError(errno.ENOENT, fqn)
@@ -246,7 +264,7 @@ class S3Endpoint(endpoints.EndpointBase):
         try:
             self.bucket.download_file(
                 fqn, backup_file.file_path,
-                ExtraArgs={},
+                ExtraArgs=self.sse_options,
                 Callback=timing.progress,
                 Config=self.transfer_config)
         except botocore.exceptions.ClientError as e:
@@ -268,7 +286,7 @@ class S3Endpoint(endpoints.EndpointBase):
                        fqn)
 
         try:
-            self.client.head_object(Bucket=self.bucket.name, Key=fqn)
+            self.client.head_object(Bucket=self.bucket.name, Key=fqn, **self.sse_options)
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] == "404":
                 return False
@@ -288,7 +306,7 @@ class S3Endpoint(endpoints.EndpointBase):
                        self.args.bucket_name, fqn)
 
         try:
-            response = self.client.head_object(Bucket=self.bucket.name, Key=fqn)
+            response = self.client.head_object(Bucket=self.bucket.name, Key=fqn, **self.sse_options)
         except botocore.exceptions.ClientError:
             self.log.debug("Key %s does not exist, so checksum is invalid",
                            fqn)
