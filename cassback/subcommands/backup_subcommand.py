@@ -109,6 +109,12 @@ class BackupSubCommand(subcommands.SubCommand):
             help="Host to backup this node as.")
 
         sub_parser.add_argument(
+            "--scan-queue-limit",
+            default=0,
+            type=int,
+            help="Size of scan queue limit, 0 means unbound.")
+
+        sub_parser.add_argument(
             "--healthcheck-host",
             default='0.0.0.0',
             help="Host to bind for TCP healthcheck.")
@@ -133,7 +139,7 @@ class BackupSubCommand(subcommands.SubCommand):
             file_util.FileReferenceContext.cleanup_temp_dir(self.args.temp_dir)
 
         # Make a queue, we put the files that need to be backed up here.
-        file_q = Queue.Queue()
+        file_q = Queue.Queue(self.args.scan_queue_limit)
 
         # Make a watcher
         watcher = WatchdogWatcher(

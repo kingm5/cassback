@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import pkg_resources
 import time
 
@@ -166,16 +167,18 @@ class TransferTiming(object):
                       (1024**2)) / ((elapsed_ms / 1000) or 1)
 
         if progress == self.size:
+            level = logging.INFO
             pattern = "Transfered file {path} in {elapsed_ms:d} ms size "\
                       "{total} at {throughput:f} MB/sec"
         else:
+            level = logging.DEBUG
             pattern = "Progress transfering file {path} elapsed "\
                       "{elapsed_ms:d} ms, transferred "\
                       "{progress} bytes at {throughput:f} MB/sec {total} "\
                       "total"
 
-        self.log.info(pattern.format(path=path, elapsed_ms=elapsed_ms, throughput=throughput,
-                                     progress=progress, total=self.size))
+        self.log.log(level, pattern.format(path=path, elapsed_ms=elapsed_ms, throughput=throughput,
+                                           progress=progress, total=self.size))
         return
 
     def __enter__(self):
