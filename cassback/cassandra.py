@@ -172,12 +172,12 @@ class FileStat(object):
 
         try:
             file_meta['user'] = pwd.getpwuid(stat.st_uid).pw_name
-        except (EnvironmentError):
+        except (EnvironmentError, KeyError):
             log.debug("Ignoring error getting user name.", exc_info=True)
             file_meta['user'] = ""
         try:
             file_meta['group'] = grp.getgrgid(stat.st_gid).gr_name
-        except (EnvironmentError):
+        except (EnvironmentError, KeyError):
             log.debug("Ignoring error getting group name.", exc_info=True)
             file_meta['group'] = ""
 
