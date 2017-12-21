@@ -4,4 +4,4 @@ COPY . /cassback
 
 RUN pip install /cassback
 
-CMD ["cassback", "--help"]
+ENTRYPOINT ["/usr/local/bin/cassback"]

@@ -10,7 +10,7 @@ import stat as stat_fn
 import tempfile
 import time
 
-import boto.utils
+from hashlib import md5
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +24,48 @@ def file_size(file_path):
     return stat.st_size
 
 
+def boto_compute_md5(fp, buf_size=8192, size=None):
+    """
+    Compute MD5 hash on passed file and return results in a tuple of values.
+    :type fp: file
+    :param fp: File pointer to the file to MD5 hash.  The file pointer
+               will be reset to its current location before the
+               method returns.
+    :type buf_size: integer
+    :param buf_size: Number of bytes per read request.
+    :type size: int
+    :param size: (optional) The Maximum number of bytes to read from
+                 the file pointer (fp). This is useful when uploading
+                 a file in multiple parts where the file is being
+                 split inplace into different parts. Less bytes may
+                 be available.
+    :return: The hex digest version of the MD5 hash
+    """
+    return boto_compute_hash(fp, buf_size, size, hash_algorithm=md5)
+
+
+def boto_compute_hash(fp, buf_size=8192, size=None, hash_algorithm=md5):
+    hash_obj = hash_algorithm()
+    spos = fp.tell()
+    if size and size < buf_size:
+        s = fp.read(size)
+    else:
+        s = fp.read(buf_size)
+    while s:
+        hash_obj.update(s)
+        if size:
+            size -= len(s)
+            if size <= 0:
+                break
+        if size and size < buf_size:
+            s = fp.read(size)
+        else:
+            s = fp.read(buf_size)
+    hex_digest = hash_obj.hexdigest()
+    fp.seek(spos)
+    return hex_digest
+
+
 def file_md5(file_path):
     """Returns a string Hex md5 digest for the file at ``file_path``."""
     log.debug("Calculating md5 for %s", file_path)
@@ -31,7 +73,7 @@ def file_md5(file_path):
     fp = open(file_path, 'rb')
     try:
         # returns tuple (md5_hex, md5_base64, size)
-        md5, _, _ = boto.utils.compute_md5(fp)
+        md5 = boto_compute_md5(fp)
     finally:
         fp.close()
     duration_ms = (time.time() * 10**3) - start_ms
