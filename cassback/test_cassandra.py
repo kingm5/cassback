@@ -34,6 +34,7 @@ class SSTableComponentTestCase(unittest.TestCase):
             file_path='xxx',
             keyspace='',
             cf='',
+            cf_id='',
             version='',
             generation='',
             component='',
@@ -48,6 +49,7 @@ class SSTableComponentTestCase(unittest.TestCase):
                 '/data/aosmd_us_east_1/objects-927c2cc0bb2e11e68e323918fdc525c0/'
                 'aosmd_us_east_1-objects-ka-3-Data.db'), {
                     'cf': 'objects',
+                    'cf_id': '927c2cc0bb2e11e68e323918fdc525c0',
                     'component': 'Data.db',
                     'format': 'legacy',
                     'generation': 3,
@@ -62,6 +64,7 @@ class SSTableComponentTestCase(unittest.TestCase):
                 '/data/aosmd_us_east_1/objects-27d7da9088e711e794a405e653bd2278/'
                 'mc-33-big-Digest.crc32'), {
                     'cf': 'objects',
+                    'cf_id': '27d7da9088e711e794a405e653bd2278',
                     'component': 'Digest.crc32',
                     'format': 'big',
                     'generation': 33,

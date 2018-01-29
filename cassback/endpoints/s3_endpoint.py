@@ -19,10 +19,11 @@ import argparse
 import base64
 import cStringIO
 import errno
-import json
 import logging
+import msgpack
 import os.path
 import threading
+import zlib
 
 import botocore.config
 import botocore.exceptions
@@ -215,7 +216,7 @@ class S3Endpoint(endpoints.EndpointBase):
         self.log.debug("Starting to store json to %s:%s",
                        self.args.bucket_name, fqn)
 
-        json_str = json.dumps(ks_backup.serialise())
+        json_str = zlib.compress(msgpack.dumps(ks_backup.serialise()))
 
         with endpoints.TransferTiming(self.log, fqn, len(json_str)):
             self.bucket.put_object(
@@ -244,7 +245,7 @@ class S3Endpoint(endpoints.EndpointBase):
 
                 raise
 
-        data = json.load(body)
+        data = msgpack.loads(zlib.decompress(body.read()))
 
         self.log.debug("Finished reading json from %s:%s",
                        self.args.bucket_name, fqn)

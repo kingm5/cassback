@@ -13,7 +13,7 @@
 # limitations under the License.
 """Utilities for working with Cassandra and the versions."""
 
-import copy
+import collections
 import datetime
 import logging
 import grp
@@ -226,6 +226,7 @@ class SSTableComponent(object):
                  file_path,
                  keyspace=None,
                  cf=None,
+                 cf_id=None,
                  version=None,
                  generation=None,
                  component=None,
@@ -243,6 +244,7 @@ class SSTableComponent(object):
         self.file_path = file_path
         self.keyspace = props()["keyspace"] if keyspace is None else keyspace
         self.cf = props()["cf"] if cf is None else cf
+        self.cf_id = props()["cf_id"] if cf_id is None else cf_id
         self.version = props()["version"] if version is None else version
         self.generation = props()["generation"] if generation is None \
             else generation
@@ -268,9 +270,9 @@ class SSTableComponent(object):
     def serialise(self):
         """Serialise the state to a dict."""
         return {
-            "file_path": self.file_path,
             "keyspace": self.keyspace,
             "cf": self.cf,
+            "cf_id": self.cf_id,
             "version": self.version,
             "generation": str(self.generation),
             "component": self.component,
@@ -285,9 +287,10 @@ class SSTableComponent(object):
         """Create an instance use the ``data`` dict."""
         assert data
         return cls(
-            data["file_path"],
+            "",
             keyspace=data["keyspace"],
             cf=data["cf"],
+            cf_id=data["cf_id"],
             version=data["version"],
             generation=int(data["generation"]),
             component=data["component"],
@@ -352,8 +355,7 @@ class SSTableComponent(object):
             raise RuntimeError("Discovered index, indexes are not supported in file path {path}".format(
                                 path=file_path))
 
-        cf, _ = cf.split('-')
-        properties['cf'] = cf
+        properties['cf'], properties['cf_id'] = cf.split('-')
         _, properties['keyspace'] = os.path.split(head)
 
         self.log.debug("Got file properties %s from path %s", properties,
@@ -385,6 +387,10 @@ class SSTableComponent(object):
         return "{keyspace}-{cf}-{version}-{generation}-{format}-{component}".format(
             **vars(self))
 
+    def __hash__(self):
+        return hash((self.keyspace, self.cf, self.cf_id, self.version, self.generation, self.component, self.temporary,
+                     self.format, self.is_deleted))
+
     def same_sstable(self, other):
         """Returns ``True`` if the ``other`` :cls:`SSTableComponent`
         is from the same SSTable as this.
@@ -410,8 +416,7 @@ class BackupFile(object):
 
     def __init__(self, file_path, host=None, md5=None, component=None):
 
-        self.file_path = component.file_path if component is not \
-            None else file_path
+        self.file_path = file_path
         self.component = SSTableComponent(file_path) if component is None \
             else component
         self.host = socket.getfqdn() if host is None else host
@@ -557,25 +562,25 @@ class KeyspaceBackup(object):
             host=self.host)
 
         # Map of {cf_name : [component]}
-        self.components = components or {}
+        self.components = collections.defaultdict(set)
+        if components:
+            self.components.update(**components)
 
     def add_component(self, component):
         """Add the ``component`` to the list of components in this manifest.
         """
         assert component.keyspace == self.keyspace
 
-        self.components.setdefault(component.cf, []).append(component)
+        self.components[component.cf].add(component)
         return component
 
     def remove_sstable(self, component):
         """Remove all components for the SSTable ``component`` belongs to."""
 
         assert component.keyspace == component.keyspace
-        old_components = self.components.setdefault(component.cf, [])
-
-        self.components[component.cf] = [
-            comp for comp in old_components if not component.same_sstable(comp)
-        ]
+        for comp in self.components[component.cf].copy():
+            if comp.same_sstable(component):
+                self.components[component.cf].discard(comp)
 
     def snapshot(self):
         """Return a deep copy of this manifest that has the current
@@ -584,7 +589,7 @@ class KeyspaceBackup(object):
         return KeyspaceBackup(
             self.keyspace,
             host=self.host,
-            components=copy.deepcopy(self.components))
+            components={cf: frozenset(components) for cf, components in self.components.iteritems()})
 
     def serialise(self):
         """Return manifest that desribes the backup set."""
