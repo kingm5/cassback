@@ -236,6 +236,7 @@ class SSTableComponent(object):
                  cf=None,
                  cf_id=None,
                  version=None,
+                 index=None,
                  generation=None,
                  component=None,
                  temporary=None,
@@ -254,6 +255,7 @@ class SSTableComponent(object):
         self.cf = props()["cf"] if cf is None else cf
         self.cf_id = props()["cf_id"] if cf_id is None else cf_id
         self.version = props()["version"] if version is None else version
+        self.index = props()["index"] if index is None else index
         self.generation = props()["generation"] if generation is None \
             else generation
         self.component = props()["component"] if component is None \
@@ -282,6 +284,7 @@ class SSTableComponent(object):
             "cf": self.cf,
             "cf_id": self.cf_id,
             "version": self.version,
+            "index": self.index,
             "generation": str(self.generation),
             "component": self.component,
             "temporary": str(self.temporary),
@@ -300,6 +303,7 @@ class SSTableComponent(object):
             cf=data["cf"],
             cf_id=data["cf_id"],
             version=data["version"],
+            index=data["index"],
             generation=int(data["generation"]),
             component=data["component"],
             temporary=True if data["temporary"].lower() == "true" else False,
@@ -334,6 +338,7 @@ class SSTableComponent(object):
 
         properties = {
             "component": pop(),
+            "index": "",
             "temporary": file_name.endswith(TEMPORARY_SUFFIX),
         }
 
@@ -360,8 +365,8 @@ class SSTableComponent(object):
 
         head, cf = os.path.split(file_dir)
         if cf.startswith('.'):
-            raise RuntimeError("Discovered index, indexes are not supported in file path {path}".format(
-                                path=file_path))
+            properties['index'] = cf
+            head, cf = os.path.split(head)
 
         properties['cf'], properties['cf_id'] = cf.split('-')
         _, properties['keyspace'] = os.path.split(head)
@@ -376,6 +381,7 @@ class SSTableComponent(object):
         """Returns the file name for the componet formatted to the
         component version.
         """
+        assert self.index == ""
 
         if self.format == "legacy":
             # Assume 2.1.x and beyond
@@ -392,12 +398,12 @@ class SSTableComponent(object):
         """
         # Assume 1.1 and beyond
         # file name adds the keyspace.
-        return "{keyspace}-{cf}-{version}-{generation}-{format}-{component}".format(
+        return "{keyspace}-{cf}{index}-{version}-{generation}-{format}-{component}".format(
             **vars(self))
 
     def __hash__(self):
         return hash((self.keyspace, self.cf, self.cf_id, self.version, self.generation, self.component, self.temporary,
-                     self.format, self.is_deleted))
+                     self.format, self.is_deleted, self.index))
 
     def same_sstable(self, other):
         """Returns ``True`` if the ``other`` :cls:`SSTableComponent`
@@ -410,7 +416,8 @@ class SSTableComponent(object):
         return (other.keyspace == self.keyspace) and (
             other.cf == self.cf) and (other.version == self.version) and (
                 other.generation == self.generation) and (
-                    other.format == self.format)
+                    other.format == self.format) and (
+                        other.index == self.index)
 
 
 # ============================================================================
