@@ -76,6 +76,14 @@ def is_snapshot_path(file_path):
     return _contains_in_path(file_path, "snapshots")
 
 
+def is_txn_log_path(file_path):
+    """Returns true if this path is a txn log path.
+
+    It's a pretty simple test: does it have 'snapshots' in it.
+    """
+    return file_path.endswith(".log") and "_txn_" in file_path
+
+
 def _contains_in_path(file_path, component):
     head = os.path.dirname(file_path or "")
     if not head:
@@ -667,7 +675,7 @@ class KeyspaceBackup(object):
         """Gets the  path to backup the keyspace manifest to."""
         return os.path.join(
             self.backup_day_dir(self.keyspace, self.host, self.timestamp),
-            "%s.json" % (self.backup_name, ))
+            "%s.mp.gz" % (self.backup_name, ))
 
     def iter_components(self):
         """Iterates through the SSTableComponents in this backup.

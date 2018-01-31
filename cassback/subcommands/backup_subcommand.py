@@ -356,6 +356,11 @@ class WatchdogWatcher(events.FileSystemEventHandler):
                               file_ref.stable_path)
                 return False
 
+            if cassandra.is_txn_log_path(file_ref.stable_path):
+                self.log.info("Ignoring txn log path %s",
+                              file_ref.stable_path)
+                return False
+
             try:
                 component = cassandra.SSTableComponent(file_ref.stable_path)
             except (ValueError):
@@ -373,7 +378,7 @@ class WatchdogWatcher(events.FileSystemEventHandler):
                               "keyspace %s", file_ref.stable_path, component.keyspace)
                 return False
 
-            if (component.keyspace.lower() == "system") and (
+            if (component.keyspace.lower().startswith("system")) and (
                     not self.include_system_keyspace):
 
                 self.log.info("Ignoring system keyspace file %s",

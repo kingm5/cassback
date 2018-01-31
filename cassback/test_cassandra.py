@@ -27,6 +27,17 @@ class CassandraTestCase(unittest.TestCase):
                 "/var/lib/cassandra/data/aosmd_us_east_2/object_cleanup_status-3fb68a8088e711e794a405e653bd2278/"
                 "mc-5-big-CompressionInfo.db"))
 
+    def test_is_txn_log_path(self):
+        self.assertTrue(
+            cassandra.is_txn_log_path(
+                "aosmd_us_geo_chcg01/object_versions-f13de5c0385511e6b0bd03fd330e462c/"
+                "mc_txn_compaction_f3222060-e658-11e7-8131-7541dfba298f.log"))
+
+        self.assertFalse(
+            cassandra.is_txn_log_path(
+                "/var/lib/cassandra/data/aosmd_us_east_2/object_cleanup_status-3fb68a8088e711e794a405e653bd2278/"
+                "mc-5-big-CompressionInfo.db"))
+
 
 class SSTableComponentTestCase(unittest.TestCase):
     def setUp(self):

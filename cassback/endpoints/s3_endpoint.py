@@ -213,7 +213,7 @@ class S3Endpoint(endpoints.EndpointBase):
     def backup_keyspace(self, ks_backup):
         fqn = self._fqn(ks_backup.backup_path)
 
-        self.log.debug("Starting to store json to %s:%s",
+        self.log.debug("Starting to store keyspace backup to %s:%s",
                        self.args.bucket_name, fqn)
 
         json_str = zlib.compress(msgpack.dumps(ks_backup.serialise()))
@@ -222,18 +222,18 @@ class S3Endpoint(endpoints.EndpointBase):
             self.bucket.put_object(
                 Key=fqn,
                 Body=json_str,
-                ContentType='application/json',
+                ContentType='application/binary',
                 **self.sse_options
             )
 
-        self.log.debug("Finished storing json to %s:%s", self.args.bucket_name,
+        self.log.debug("Finished storing keyspace backup to %s:%s", self.args.bucket_name,
                        fqn)
         return
 
     def read_keyspace(self, path):
         fqn = self._fqn(path)
 
-        self.log.debug("Starting to read json from %s:%s",
+        self.log.debug("Starting to read keyspace backup from %s:%s",
                        self.args.bucket_name, fqn)
 
         with endpoints.TransferTiming(self.log, fqn, 0):
@@ -247,7 +247,7 @@ class S3Endpoint(endpoints.EndpointBase):
 
         data = msgpack.loads(zlib.decompress(body.read()))
 
-        self.log.debug("Finished reading json from %s:%s",
+        self.log.debug("Finished reading keyspace backup from %s:%s",
                        self.args.bucket_name, fqn)
 
         return cassandra.KeyspaceBackup.deserialise(data)
