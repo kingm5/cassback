@@ -243,7 +243,8 @@ class SnapWorkerThread(subcommands.SubCommandWorkerThread):
             return False
 
         uploaded_path = endpoint.backup_file(backup_file)
-        endpoint.backup_keyspace(ks_manifest)
+        if ks_manifest is not None:
+            endpoint.backup_keyspace(ks_manifest)
 
         self.log.info("Uploaded file %s to %s", backup_file.file_path,
                       uploaded_path)
@@ -305,7 +306,8 @@ class WatchdogWatcher(events.FileSystemEventHandler):
             for filename in files:
                 self._maybe_queue_file(
                     os.path.join(root, filename),
-                    enqueue=not (self.ignore_existing))
+                    enqueue=not (self.ignore_existing),
+                    snapshot_ks=False)
 
         # watch if configured
         if self.ignore_changes:
@@ -335,7 +337,7 @@ class WatchdogWatcher(events.FileSystemEventHandler):
             self.keyspaces[keyspace] = ks_manifest
         return ks_manifest
 
-    def _maybe_queue_file(self, file_path, enqueue=True):
+    def _maybe_queue_file(self, file_path, enqueue=True, snapshot_ks=True):
         if self.temp_dir is not None and os.path.commonprefix([file_path, self.temp_dir]) == self.temp_dir:
             # if temp_dir is under data_dir, skip temp files immediately
             return False
@@ -391,7 +393,7 @@ class WatchdogWatcher(events.FileSystemEventHandler):
             if enqueue:
                 self.log.info("Queueing file %s", file_ref.stable_path)
                 self.file_queue.put(
-                    BackupMessage(file_ref, ks_manifest.snapshot(), component))
+                    BackupMessage(file_ref, ks_manifest.snapshot() if snapshot_ks else None, component))
                 # Do not delete the file ref when we exit the context
                 file_ref.ignore_next_exit = True
 

@@ -198,6 +198,11 @@ class FileReferenceContext(object):
 
         self._stable_dir = stable_dir
         self.stable_path = stable_path
+
+        del self._temp_dir
+        del self._root_dir
+        del self._source_path
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
