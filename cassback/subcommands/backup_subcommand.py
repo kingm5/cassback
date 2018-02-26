@@ -165,6 +165,10 @@ class BackupSubCommand(subcommands.SubCommand):
         # Start the watcher
         watcher.start()
 
+        self.log.info("Watcher finished, waiting for queue to be drained...")
+
+        file_q.join()
+
         self.log.info("Finished sub command %s", self.command_name)
 
         # There is no message to call. Assume the process has been running
@@ -217,6 +221,10 @@ class SnapWorkerThread(subcommands.SubCommandWorkerThread):
 
         Returns `True` if the file was uploaded, `False` otherwise.
         """
+        if component is None:
+            # just backup the manifest
+            endpoint.backup_keyspace(ks_manifest)
+            return True
 
         self.log.info("Uploading file %s", component)
 
@@ -308,6 +316,12 @@ class WatchdogWatcher(events.FileSystemEventHandler):
                     os.path.join(root, filename),
                     enqueue=not (self.ignore_existing),
                     snapshot_ks=False)
+
+        self.log.info("Uploading initial keyspace manifests.")
+
+        for ks_manifest in self.keyspaces.values():
+            self.file_queue.put(
+                BackupMessage(None, ks_manifest.snapshot(), None))
 
         # watch if configured
         if self.ignore_changes:
@@ -428,6 +442,16 @@ class WatchdogWatcher(events.FileSystemEventHandler):
         if cassandra.is_snapshot_path(file_path):
             self.log.info("Ignoring deleted snapshot path %s", file_path)
             return
+
+        if cassandra.is_backups_path(file_path):
+            self.log.info("Ignoring backups path %s",
+                          file_path)
+            return False
+
+        if cassandra.is_txn_log_path(file_path):
+            self.log.info("Ignoring txn log path %s",
+                          file_path)
+            return False
 
         try:
             component = cassandra.SSTableComponent(file_path, is_deleted=True)

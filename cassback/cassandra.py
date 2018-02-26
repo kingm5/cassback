@@ -682,7 +682,7 @@ class KeyspaceBackup(object):
         """Gets the  path to backup the keyspace manifest to."""
         return os.path.join(
             self.backup_day_dir(self.keyspace, self.host, self.timestamp),
-            "%s.mp.gz" % (self.backup_name, ))
+            "%s.mp" % (self.backup_name, ))
 
     def iter_components(self):
         """Iterates through the SSTableComponents in this backup.
