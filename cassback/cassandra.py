@@ -303,7 +303,7 @@ class SSTableComponent(object):
             cf=data["cf"],
             cf_id=data["cf_id"],
             version=data["version"],
-            index=data["index"],
+            index=data["index"] if "index" in data else "",
             generation=int(data["generation"]),
             component=data["component"],
             temporary=True if data["temporary"].lower() == "true" else False,
