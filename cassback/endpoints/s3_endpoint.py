@@ -55,6 +55,7 @@ class S3Endpoint(endpoints.EndpointBase):
         self.core_config = botocore.config.Config(
             s3={'addressing_style': args.aws_addressing_style},
             retries={'max_attempts': args.retries},
+            read_timeout=args.read_timeout,
         )
         self.resource = self.session.resource('s3', endpoint_url=args.s3_endpoint)
         self.client = self.resource.meta.client
@@ -158,6 +159,12 @@ class S3Endpoint(endpoints.EndpointBase):
             default=5,
             type=int,
             help='Number of times to retry s3 calls')
+        group.add_argument(
+            '--read-timeout',
+            dest='read_timeout',
+            default=60,
+            type=int,
+            help='Read timeout for S3 calls (seconds)')
 
         return group
 
