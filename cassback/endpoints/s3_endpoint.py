@@ -27,6 +27,7 @@ import zlib
 
 import botocore.config
 import botocore.exceptions
+import boto3.exceptions
 import boto3.session
 import boto3.s3.transfer
 
@@ -183,17 +184,30 @@ class S3Endpoint(endpoints.EndpointBase):
         self.log.debug("Starting upload of %s to %s:%s",
                        backup_file, self.args.bucket_name, fqn)
 
-        timing = endpoints.TransferTiming(self.log, fqn,
-                                          backup_file.component.stat.size)
+        num_retries = 5
+        for attempt in xrange(num_retries):
+            timing = endpoints.TransferTiming(self.log, fqn,
+                                              backup_file.component.stat.size)
 
-        self.bucket.upload_file(
-            backup_file.file_path, fqn,
-            ExtraArgs=dict(
-                Metadata=self._dict_to_aws_meta(backup_file.serialise()),
-                **self.sse_options
-            ),
-            Callback=timing.progress,
-            Config=self.transfer_config)
+            try:
+                self.bucket.upload_file(
+                    backup_file.file_path, fqn,
+                    ExtraArgs=dict(
+                        Metadata=self._dict_to_aws_meta(backup_file.serialise()),
+                        **self.sse_options
+                    ),
+                    Callback=timing.progress,
+                    Config=self.transfer_config)
+            except boto3.exceptions.S3UploadFailedError as e:
+                # retry "Request Timeout (408)" errors
+                if 'Request Timeout' not in str(e):
+                    raise
+
+                if attempt == num_retries - 1:
+                    raise
+
+                self.log.warn("Retrying (attempt %d) exception %s while uploading %s to %s:%s",
+                              attempt, e, backup_file, self.args.bucket_name, fqn)
 
         self.log.debug("Finished upload of %s to %s:%s",
                        backup_file, self.args.bucket_name, fqn)

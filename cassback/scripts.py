@@ -109,6 +109,7 @@ def arg_parser():
 def init_logging(args):
     config = {
         'level': getattr(logging, args.log_level),
+        'format': "%(asctime)s %(levelname)s %(name)s %(message)s",
     }
     if args.log_file != "-":
         config['filename'] = os.path.abspath(args.log_file)
