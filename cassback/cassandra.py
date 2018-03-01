@@ -157,9 +157,9 @@ class FileStat(object):
         return cls(
             data["file_path"],
             uid=get_i("uid"),
-            user=data["user"],
+            user=data.get("user", ""),
             gid=get_i("gid"),
-            group=data["group"],
+            group=data.get("group", ""),
             mode=get_i("mode"),
             size=get_i("size"))
 
