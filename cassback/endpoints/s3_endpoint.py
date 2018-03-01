@@ -198,8 +198,11 @@ class S3Endpoint(endpoints.EndpointBase):
                     ),
                     Callback=timing.progress,
                     Config=self.transfer_config)
+
+                break
             except boto3.exceptions.S3UploadFailedError as e:
-                # retry "Request Timeout (408)" errors
+                # retry "Request Timeout (408)" errors only, other errors
+                # are retried by boto3
                 if 'Request Timeout' not in str(e):
                     raise
 
