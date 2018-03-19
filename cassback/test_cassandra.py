@@ -86,3 +86,17 @@ class SSTableComponentTestCase(unittest.TestCase):
                     'temporary': False,
                     'version': 'mc'
                 })
+        self.assertEqual(
+            self.component._component_properties(
+                'data0/aosmd_us_west_1/object_visible_versions-'
+                'd9f1ef5001e511e88cf2fbeae5f953ec/mc-1-big-Summary.db'), {
+                  'cf': 'object_visible_versions',
+                  'cf_id': 'd9f1ef5001e511e88cf2fbeae5f953ec',
+                  'component': 'Summary.db',
+                  'format': 'big',
+                  'generation': 1,
+                  'index': '',
+                  'keyspace': 'aosmd_us_west_1',
+                  'temporary': True,
+                  'version': 'mc',
+            })

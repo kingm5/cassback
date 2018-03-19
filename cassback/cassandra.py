@@ -30,6 +30,7 @@ import file_util
 class Components(object):
     """Constants for Cassandra SSTable components."""
     DATA = 'Data.db'
+    SUMMARY = 'Summary.db'
 
 
 TEMPORARY_MARKERS = ["tmp", "tmplink"]
@@ -370,6 +371,9 @@ class SSTableComponent(object):
 
         properties['cf'], properties['cf_id'] = cf.split('-')
         _, properties['keyspace'] = os.path.split(head)
+
+        # Summary.db gets rebuilt, so it's not immutable
+        properties['temporary'] |= properties['component'] == Components.SUMMARY
 
         self.log.debug("Got file properties %s from path %s", properties,
                        file_path)
