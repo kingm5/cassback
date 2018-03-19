@@ -138,6 +138,8 @@ class BackupSubCommand(subcommands.SubCommand):
         if self.args.cleanup_temp_dir:
             file_util.FileReferenceContext.cleanup_temp_dir(self.args.temp_dir)
 
+        md5_cache = file_util.MD5Cache(self.args.temp_dir)
+
         # Make a queue, we put the files that need to be backed up here.
         file_q = Queue.Queue(self.args.scan_queue_limit)
 
@@ -150,7 +152,7 @@ class BackupSubCommand(subcommands.SubCommand):
 
         # Make worker threads
         self.workers = [
-            self._create_worker_thread(i, file_q)
+            self._create_worker_thread(i, file_q, md5_cache)
             for i in range(self.args.threads)
         ]
         for worker in self.workers:
@@ -175,10 +177,10 @@ class BackupSubCommand(subcommands.SubCommand):
         # for a while.
         return (0, "")
 
-    def _create_worker_thread(self, i, file_queue):
+    def _create_worker_thread(self, i, file_queue, md5_cache):
         """Creates a worker thread for the snap command
         """
-        return SnapWorkerThread(i, file_queue, copy.copy(self.args))
+        return SnapWorkerThread(i, file_queue, md5_cache, copy.copy(self.args))
 
 
 # ============================================================================
@@ -188,10 +190,11 @@ class BackupSubCommand(subcommands.SubCommand):
 class SnapWorkerThread(subcommands.SubCommandWorkerThread):
     log = logging.getLogger("%s.%s" % (__name__, "SnapWorkerThread"))
 
-    def __init__(self, thread_id, file_q, args):
+    def __init__(self, thread_id, file_q, md5_cache, args):
         super(SnapWorkerThread, self).__init__("SnapWorker-", thread_id)
 
         self.file_q = file_q
+        self.md5_cache = md5_cache
         self.args = args
 
     def _do_run(self):
@@ -236,7 +239,8 @@ class SnapWorkerThread(subcommands.SubCommandWorkerThread):
 
         # Create a BackupFile, this will have checksums
         backup_file = cassandra.BackupFile(
-            component.file_path, host=self.args.host, component=component)
+            component.file_path, host=self.args.host, component=component,
+            md5=self.md5_cache.compute_md5(component.file_path))
 
         # Store the cassandra file
         if endpoint.exists(backup_file.backup_path):

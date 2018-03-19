@@ -24,7 +24,6 @@ import re
 import socket
 
 import dt_util
-import file_util
 
 
 class Components(object):
@@ -439,7 +438,8 @@ class BackupFile(object):
         self.component = SSTableComponent(file_path) if component is None \
             else component
         self.host = socket.getfqdn() if host is None else host
-        self.md5 = file_util.file_md5(self.file_path) if md5 is None else md5
+        self.md5 = md5
+        assert self.md5 is not None
 
     def __str__(self):
         return "BackupFile {file_path}: host {host}, md5 {md5}, "\

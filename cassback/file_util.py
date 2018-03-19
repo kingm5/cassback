@@ -5,9 +5,11 @@ import glob
 import logging
 import os
 import os.path
+import shelve
 import shutil
 import stat as stat_fn
 import tempfile
+import threading
 import time
 
 from hashlib import md5
@@ -217,3 +219,47 @@ class FileReferenceContext(object):
             self._stable_dir = None
             self.stable_path = None
         return False
+
+
+class MD5Cache(object):
+    """
+    MD5Cache caches md5 for files by path/inode number and size.
+    """
+    log = logging.getLogger("%s.%s" % (__name__, "MD5Cache"))
+
+    def __init__(self, db_directory):
+        if db_directory is None:
+            self.shelf = None
+            return
+
+        self.shelf = shelve.open(os.path.join(db_directory, "md5cache"))
+        self.lock = threading.Lock()
+
+    def compute_md5(self, file_path):
+        if self.shelf is None:
+            # passthrough
+            return file_md5(file_path)
+
+        stat = os.stat(file_path)
+        key = os.path.basename(file_path) + "/" + str(stat.st_ino)
+
+        with self.lock:
+            ok = key in self.shelf
+
+        if ok:
+            with self.lock:
+                size, md5 = self.shelf[key]
+
+            if size == stat.st_size:
+                self.log.debug("Using cached md5 for %s", file_path)
+                return md5
+
+            self.log.warn("Size mismatch for %s: %d != %d", file_path,
+                          size, stat.st_size)
+
+        md5 = file_md5(file_path)
+
+        with self.lock:
+            self.shelf[key] = (stat.st_size, md5)
+
+        return md5
