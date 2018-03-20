@@ -263,3 +263,7 @@ class MD5Cache(object):
             self.shelf[key] = (stat.st_size, md5)
 
         return md5
+
+    def close(self):
+        if self.shelf is not None:
+            self.shelf.close()

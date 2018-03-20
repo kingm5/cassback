@@ -173,6 +173,8 @@ class BackupSubCommand(subcommands.SubCommand):
 
         self.log.info("Finished sub command %s", self.command_name)
 
+        md5_cache.close()
+
         # There is no message to call. Assume the process has been running
         # for a while.
         return (0, "")
